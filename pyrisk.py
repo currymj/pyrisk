@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 import logging
-import random
 import importlib
 import re
 import collections
 import curses
 from game import Game
+from trace import create_trace
 
 from world import CONNECT, MAP, KEY, AREAS
 
@@ -24,6 +24,7 @@ parser.add_argument("-g", "--games", type=int, default=1, help="Number of rounds
 parser.add_argument("-w", "--wait", action="store_true", default=False, help="Pause and wait for a keypress after each action")
 parser.add_argument("players", nargs="+", help="Names of the AI classes to use. May use 'ExampleAI*3' syntax.")
 parser.add_argument("--deal", action="store_true", default=False, help="Deal territories rather than letting players choose")
+parser.add_argument("--trace", type=str, default=None, help="Write trace log to file for cross-implementation testing")
 
 args = parser.parse_args()
 
@@ -35,8 +36,8 @@ if args.log:
 elif not args.curses:
     logging.basicConfig()
 
-if args.seed is not None:
-    random.seed(args.seed)
+# Create trace logger if requested
+trace = create_trace(args.trace)
 
 player_classes = []
 for p in args.players:
@@ -60,7 +61,8 @@ for p in args.players:
             raise
 
 kwargs = dict(curses=args.curses, color=args.color, delay=args.delay,
-              connect=CONNECT, cmap=MAP, ckey=KEY, areas=AREAS, wait=args.wait, deal=args.deal)
+              connect=CONNECT, cmap=MAP, ckey=KEY, areas=AREAS, wait=args.wait, deal=args.deal,
+              seed=args.seed, trace=trace)
 def wrapper(stdscr, **kwargs):
     g = Game(screen=stdscr, **kwargs)
     for i, klass in enumerate(player_classes):
@@ -85,4 +87,7 @@ else:
     print("Outcome of %s games" % args.games)
     for k in sorted(wins, key=lambda x: wins[x]):
         print("%s [%s]:\t%s" % (k, player_classes[NAMES.index(k)].__name__, wins[k]))
+
+# Close trace file
+trace.close()
 

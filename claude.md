@@ -26,18 +26,21 @@ No external packages required.
 
 ```
 pyrisk/
-├── pyrisk.py       # Main entry point and CLI argument parsing
-├── game.py         # Core game logic and turn management
-├── world.py        # Map data (territories, connections, ASCII art)
-├── territory.py    # Territory, Area, and World classes
-├── player.py       # Player class and properties
-├── display.py      # Console and curses display handling
+├── pyrisk.py           # Main entry point and CLI argument parsing
+├── game.py             # Core game logic and turn management
+├── world.py            # Map data (territories, connections, ASCII art)
+├── territory.py        # Territory, Area, and World classes
+├── player.py           # Player class and properties
+├── display.py          # Console and curses display handling
+├── trace.py            # Tracing infrastructure for cross-implementation testing
+├── test_determinism.sh # Script to verify deterministic behavior
+├── compare_traces.sh   # Script to compare Python vs C++ traces
 └── ai/
-    ├── __init__.py # AI base class with utility methods
-    ├── stupid.py   # StupidAI - random play
-    ├── better.py   # BetterAI - priority-based continent strategy
-    ├── al.py       # AlAI - fixed priority order strategy
-    └── chron.py    # ChronAI - advanced strategic AI (has Python 3 bugs)
+    ├── __init__.py     # AI base class with utility methods
+    ├── stupid.py       # StupidAI - random play
+    ├── better.py       # BetterAI - priority-based continent strategy
+    ├── al.py           # AlAI - fixed priority order strategy
+    └── chron.py        # ChronAI - advanced strategic AI (has Python 3 bugs)
 ```
 
 ## Available AIs
@@ -63,6 +66,7 @@ Options:
   -g, --games     Number of games to play (default: 1)
   -w, --wait      Pause for keypress after each action
   --deal          Deal territories randomly instead of player choice
+  --trace FILE    Write trace log for cross-implementation testing
 
 Players:
   Use AI class names (e.g., StupidAI, BetterAI)
@@ -128,6 +132,52 @@ python3 pyrisk.py --nocurses -d 0 -s 42 StupidAI*2
 Run multiple games to compare AIs:
 ```bash
 python3 pyrisk.py --nocurses -d 0 -g 100 StupidAI BetterAI
+```
+
+## Cross-Implementation Testing
+
+The codebase includes tracing infrastructure for verifying that alternative implementations (e.g., C++) produce identical behavior.
+
+### Generating Traces
+
+```bash
+# Generate a trace file with a fixed seed
+python3 pyrisk.py --nocurses -d 0 -s 42 --trace trace.jsonl StupidAI*2
+```
+
+The trace file is JSON-lines format containing:
+- All random number generator calls (with call_id for sequencing)
+- All game events (claims, reinforcements, combat, victory)
+
+### Verifying Determinism
+
+```bash
+# Test that the same seed produces identical traces
+./test_determinism.sh 20  # Test with 20 different seeds
+```
+
+### Comparing Implementations
+
+```bash
+# Generate Python trace
+python3 pyrisk.py --nocurses -d 0 -s 42 --trace py.jsonl StupidAI*2
+
+# Generate C++ trace (when implemented)
+./pyrisk_cpp -s 42 --trace cpp.jsonl StupidAI StupidAI
+
+# Compare
+./compare_traces.sh 42 py.jsonl cpp.jsonl
+```
+
+### Trace File Format
+
+```jsonl
+{"call_id": 0, "call_type": "shuffle", "event": "random", "result": ["BRAVO", "ALPHA"]}
+{"event": "start", "turn_order": ["BRAVO", "ALPHA"]}
+{"call_id": 1, "call_type": "choice", "event": "random", "result": 1, "seq_len": 42}
+{"event": "claim", "player": "BRAVO", "territory": "Northwest Territories"}
+...
+{"event": "victory", "player": "BRAVO"}
 ```
 
 ## Known Issues

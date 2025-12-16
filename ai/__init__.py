@@ -1,4 +1,4 @@
-import random
+import random as stdlib_random
 import logging
 
 class AI(object):
@@ -6,6 +6,11 @@ class AI(object):
     Base class for AIs to inherit from, containing some utility methods
     """
     _sim_cache = {}
+
+    @property
+    def random(self):
+        """Return the game's random generator for deterministic tracing."""
+        return self.game.random
     @classmethod
     def simulate(cls, n_atk, n_def, tests=1000):
         """
@@ -27,9 +32,9 @@ class AI(object):
             d = n_def
             while a > 1 and d > 0:
                 atk_dice = min(a - 1, 3)
-                atk_roll = sorted([random.randint(1, 6) for i in range(atk_dice)], reverse=True)
+                atk_roll = sorted([stdlib_random.randint(1, 6) for i in range(atk_dice)], reverse=True)
                 def_dice = min(d, 2)
-                def_roll = sorted([random.randint(1, 6) for i in range(def_dice)], reverse=True)
+                def_roll = sorted([stdlib_random.randint(1, 6) for i in range(def_dice)], reverse=True)
 
                 for aa, dd in zip(atk_roll, def_roll):
                     if aa > dd:

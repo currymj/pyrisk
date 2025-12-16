@@ -1,5 +1,4 @@
 from ai import AI
-import random
 import collections
 
 class StupidAI(AI):
@@ -9,22 +8,26 @@ class StupidAI(AI):
     """
     def initial_placement(self, empty, remaining):
         if empty:
-            return random.choice(empty)
+            # Sort for deterministic ordering
+            return self.random.choice(sorted(empty, key=lambda t: t.name))
         else:
-            t = random.choice(list(self.player.territories))
+            # Sort for deterministic ordering
+            t = self.random.choice(sorted(self.player.territories, key=lambda t: t.name))
             return t
 
     def attack(self):
-        for t in self.player.territories:
-            for a in t.connect:
+        # Sort territories and connections for deterministic ordering
+        for t in sorted(self.player.territories, key=lambda x: x.name):
+            for a in sorted(t.connect, key=lambda x: x.name):
                 if a.owner != self.player:
                     if t.forces > a.forces:
                         yield (t, a, None, None)
 
     def reinforce(self, available):
-        border = [t for t in self.player.territories if t.border]
+        # Sort for deterministic ordering
+        border = sorted([t for t in self.player.territories if t.border], key=lambda t: t.name)
         result = collections.defaultdict(int)
         for i in range(available):
-            t = random.choice(border)
+            t = self.random.choice(border)
             result[t] += 1
         return result

@@ -2,9 +2,10 @@ from display import Display, CursesDisplay
 from player import Player
 from territory import World
 from world import CONNECT, AREAS, MAP, KEY
+from trace import TracedRandom, NullTrace
 import logging
 LOG = logging.getLogger("pyrisk")
-import random
+import random as stdlib_random
 
 
 
@@ -24,11 +25,17 @@ class Game(object):
         "round": None, #the round number
         "wait": False, #whether to pause and wait for a keypress after each event
         "history": {}, #the win/loss history for each player, for multiple rounds
-        "deal": False #deal out territories rather than let players choose
+        "deal": False, #deal out territories rather than let players choose
+        "seed": None, #random seed for reproducibility
+        "trace": None #TraceLogger instance for cross-implementation testing
     }
     def __init__(self, **options):
         self.options = self.defaults.copy()
         self.options.update(options)
+
+        # Set up tracing and random number generator
+        self.trace = self.options['trace'] or NullTrace()
+        self.random = TracedRandom(self.options['seed'], self.options['trace'])
 
         self.world = World()
         self.world.load(self.options['areas'], self.options['connect'])
@@ -66,21 +73,60 @@ class Game(object):
         `msg` is a tuple describing what happened.
         `territory` is a list of territory objects to be highlighted, if any
         `player` is a list of player names to be highlighted, if any
-        
+
         Calling this method triggers the display to be updated, and any AI
         players that have implemented event() to be notified.
         """
-        
+
         self.display.update(msg, territory=territory, player=player)
-        
+
         LOG.info([str(m) for m in msg])
+
+        # Log to trace file for cross-implementation testing
+        self._trace_event(msg)
+
         for p in self.players.values():
             p.ai.event(msg)
+
+    def _trace_event(self, msg):
+        """Log game events in a format suitable for comparison testing."""
+        event_type = msg[0]
+        if event_type == "start":
+            self.trace.log("start", turn_order=self.turn_order)
+        elif event_type == "claim":
+            _, player, t = msg
+            self.trace.log("claim", player=player.name, territory=t.name)
+        elif event_type == "deal":
+            _, player, t = msg
+            self.trace.log("deal", player=player.name, territory=t.name)
+        elif event_type == "reinforce":
+            _, player, t, f = msg
+            self.trace.log("reinforce", player=player.name, territory=t.name,
+                          forces=f, total=t.forces)
+        elif event_type == "conquer":
+            _, player, opponent, st, tt, initial, final = msg
+            self.trace.log("conquer", player=player.name, opponent=opponent.name,
+                          src=st.name, dest=tt.name,
+                          initial_atk=initial[0], initial_def=initial[1],
+                          final_atk=final[0], final_def=final[1])
+        elif event_type == "defeat":
+            _, player, opponent, st, tt, initial, final = msg
+            self.trace.log("defeat", player=player.name, opponent=opponent.name,
+                          src=st.name, dest=tt.name,
+                          initial_atk=initial[0], initial_def=initial[1],
+                          final_atk=final[0], final_def=final[1])
+        elif event_type == "move":
+            _, player, st, tt, count = msg
+            self.trace.log("move", player=player.name, src=st.name, dest=tt.name,
+                          count=count)
+        elif event_type == "victory":
+            _, winner = msg
+            self.trace.log("victory", player=winner.name)
         
     def play(self):
         assert 2 <= len(self.players) <= 5
         self.turn_order = list(self.players)
-        random.shuffle(self.turn_order)
+        self.random.shuffle(self.turn_order)
         for i, name in enumerate(self.turn_order):
             self.players[name].color = i + 1
             self.players[name].ord = ord('\/-|+*'[i])
@@ -176,9 +222,9 @@ class Game(object):
 
         while n_atk > 1 and n_def > 0 and f_atk(n_atk, n_def):
             atk_dice = min(n_atk - 1, 3)
-            atk_roll = sorted([random.randint(1, 6) for i in range(atk_dice)], reverse=True)
+            atk_roll = sorted([self.random.randint(1, 6) for i in range(atk_dice)], reverse=True)
             def_dice = min(n_def, 2)
-            def_roll = sorted([random.randint(1, 6) for i in range(def_dice)], reverse=True)
+            def_roll = sorted([self.random.randint(1, 6) for i in range(def_dice)], reverse=True)
 
             for a, d in zip(atk_roll, def_roll):
                 if a > d:
@@ -206,12 +252,13 @@ class Game(object):
             return False
 
     def initial_placement(self):
-        empty = list(self.world.territories.values())
+        # Sort territories for deterministic ordering across runs
+        empty = sorted(self.world.territories.values(), key=lambda t: t.name)
         available = 35 - 2*len(self.players)
         remaining = {p: available for p in self.players}
 
         if self.options['deal']:
-            random.shuffle(empty)
+            self.random.shuffle(empty)
             while empty:
                 t = empty.pop()
                 t.forces += 1
