@@ -24,7 +24,8 @@ class Game(object):
         "round": None, #the round number
         "wait": False, #whether to pause and wait for a keypress after each event
         "history": {}, #the win/loss history for each player, for multiple rounds
-        "deal": False #deal out territories rather than let players choose
+        "deal": False, #deal out territories rather than let players choose
+        "event_logger": None, #callable receiving serialised event dictionaries
     }
     def __init__(self, **options):
         self.options = self.defaults.copy()
@@ -76,6 +77,28 @@ class Game(object):
         LOG.info([str(m) for m in msg])
         for p in self.players.values():
             p.ai.event(msg)
+        if self.options.get("event_logger"):
+            self.options["event_logger"](self._serialise_event(msg))
+
+    def _serialise_event(self, msg):
+        def serialise_value(value):
+            from player import Player
+            from territory import Territory
+
+            if isinstance(value, Player):
+                return value.name
+            if isinstance(value, Territory):
+                return value.name
+            if isinstance(value, tuple) and len(value) == 2 and all(isinstance(v, int) for v in value):
+                return [value[0], value[1]]
+            return value
+
+        event_name = msg[0]
+        args = [serialise_value(v) for v in msg[1:]]
+        if event_name in ("claim", "deal") and len(args) == 2:
+            # Normalise to include the number of forces placed, matching the C++ logger.
+            args.append(1)
+        return {"event": event_name, "args": args}
         
     def play(self):
         assert 2 <= len(self.players) <= 5
@@ -93,7 +116,11 @@ class Game(object):
             if self.player.alive:
                 choices = self.player.ai.reinforce(self.player.reinforcements)
                 assert sum(choices.values()) == self.player.reinforcements
-                for tt, ff in choices.items():
+                def name_for(tt):
+                    t = self.world.territory(tt)
+                    return t.name if t else str(tt)
+
+                for tt, ff in sorted(choices.items(), key=lambda kv: name_for(kv[0])):
                     t = self.world.territory(tt)
                     f = int(ff)
                     if t is None:
@@ -254,4 +281,3 @@ class Game(object):
                 remaining[self.player.name] -= 1
                 self.event(("reinforce", self.player, t, 1), territory=[t], player=[self.player.name])
                 self.turn += 1
-

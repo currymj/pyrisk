@@ -167,14 +167,96 @@ void World::load(const std::unordered_map<std::string, AreaDefinition>& area_def
     }
 }
 
-PythonicRNG::PythonicRNG() : engine_(std::mt19937(std::random_device{}())) {}
-PythonicRNG::PythonicRNG(std::uint32_t seed) : engine_(seed) {}
+namespace {
+constexpr std::uint32_t kMatrixA = 0x9908B0DFU;
+constexpr std::uint32_t kUpperMask = 0x80000000U;
+constexpr std::uint32_t kLowerMask = 0x7FFFFFFFU;
+}
 
-void PythonicRNG::seed(std::uint32_t seed) { engine_.seed(seed); }
+PythonicRNG::PythonicRNG(Mode mode) : mode_(mode) {
+    seed(static_cast<std::uint32_t>(std::random_device{}()));
+}
+PythonicRNG::PythonicRNG(std::uint32_t seed_value, Mode mode) : mode_(mode) { seed(seed_value); }
+
+void PythonicRNG::init_by_array(const std::vector<std::uint32_t>& key) {
+    state_[0] = 19650218UL;
+    for (std::size_t i = 1; i < kN; ++i) {
+        state_[i] =
+            1812433253UL * (state_[i - 1] ^ (state_[i - 1] >> 30)) + static_cast<std::uint32_t>(i);
+    }
+
+    std::size_t i = 1;
+    std::size_t j = 0;
+    std::size_t key_length = key.size();
+    std::size_t k = kN > key_length ? kN : key_length;
+    for (; k > 0; --k) {
+        state_[i] = (state_[i] ^ ((state_[i - 1] ^ (state_[i - 1] >> 30)) * 1664525UL)) + key[j] +
+                    static_cast<std::uint32_t>(j);
+        state_[i] &= 0xFFFFFFFFUL;
+        ++i;
+        ++j;
+        if (i >= kN) {
+            state_[0] = state_[kN - 1];
+            i = 1;
+        }
+        if (j >= key_length) {
+            j = 0;
+        }
+    }
+    for (k = kN - 1; k > 0; --k) {
+        state_[i] = (state_[i] ^ ((state_[i - 1] ^ (state_[i - 1] >> 30)) * 1566083941UL)) -
+                    static_cast<std::uint32_t>(i);
+        state_[i] &= 0xFFFFFFFFUL;
+        ++i;
+        if (i >= kN) {
+            state_[0] = state_[kN - 1];
+            i = 1;
+        }
+    }
+    state_[0] = 0x80000000UL;
+    index_ = kN;
+}
+
+void PythonicRNG::twist() {
+    for (std::size_t i = 0; i < kN; ++i) {
+        std::uint32_t y = (state_[i] & kUpperMask) | (state_[(i + 1) % kN] & kLowerMask);
+        state_[i] = state_[(i + kM) % kN] ^ (y >> 1) ^ ((y & 0x1U) ? kMatrixA : 0x0U);
+    }
+    index_ = 0;
+}
+
+std::uint32_t PythonicRNG::extract() {
+    if (index_ >= kN) {
+        twist();
+    }
+    std::uint32_t y = state_[index_++];
+    y ^= (y >> 11);
+    y ^= (y << 7) & 0x9D2C5680UL;
+    y ^= (y << 15) & 0xEFC60000UL;
+    y ^= (y >> 18);
+    return y;
+}
+
+void PythonicRNG::seed(std::uint32_t seed_value) {
+    last_seed_ = seed_value;
+    if (mode_ == Mode::StdMT) {
+        std_engine_.seed(seed_value);
+    } else {
+        init_by_array({seed_value});
+    }
+}
+void PythonicRNG::set_mode(Mode mode) {
+    mode_ = mode;
+    seed(last_seed_);
+}
 
 int PythonicRNG::randint(int low, int high_inclusive) {
     if (high_inclusive < low) {
         throw std::invalid_argument("high must be >= low");
+    }
+    if (mode_ == Mode::StdMT) {
+        std::uniform_int_distribution<int> dist(low, high_inclusive);
+        return dist(std_engine_);
     }
     return randbelow(high_inclusive - low + 1) + low;
 }
@@ -183,11 +265,21 @@ std::uint32_t PythonicRNG::randbits(int k) {
     if (k <= 0 || k > 32) {
         throw std::invalid_argument("k must be between 1 and 32");
     }
-    if (k == 32) {
-        return engine_();
+    if (mode_ == Mode::StdMT) {
+        if (k == 32) {
+            return std_engine_();
+        }
+        std::uint32_t mask = (static_cast<std::uint64_t>(1) << k) - 1;
+        return std_engine_() & mask;
+    } else {
+        std::uint64_t accum = 0;
+        int bits = 0;
+        while (bits < k) {
+            accum = (accum << 32) | extract();
+            bits += 32;
+        }
+        return static_cast<std::uint32_t>(accum >> (bits - k));
     }
-    std::uint32_t mask = (static_cast<std::uint64_t>(1) << k) - 1;
-    return engine_() & mask;
 }
 
 int PythonicRNG::randbelow(int n) {
@@ -197,15 +289,31 @@ int PythonicRNG::randbelow(int n) {
     if (n == 1) {
         return 0;
     }
-    int k = 0;
-    for (int temp = n - 1; temp > 0; temp >>= 1) {
-        ++k;
-    }
-    while (true) {
-        std::uint32_t r = randbits(k);
-        if (r < static_cast<std::uint32_t>(n)) {
-            return static_cast<int>(r);
+    if (mode_ == Mode::StdMT) {
+        std::uniform_int_distribution<int> dist(0, n - 1);
+        return dist(std_engine_);
+    } else {
+        int k = 0;
+        for (int temp = n; temp > 0; temp >>= 1) {
+            ++k;
         }
+        while (true) {
+            std::uint32_t r = randbits(k);
+            if (r < static_cast<std::uint32_t>(n)) {
+                return static_cast<int>(r);
+            }
+        }
+    }
+}
+
+double PythonicRNG::random() {
+    if (mode_ == Mode::StdMT) {
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+        return dist(std_engine_);
+    } else {
+        std::uint32_t a = extract() >> 5;
+        std::uint32_t b = extract() >> 6;
+        return (a * 67108864.0 + b) / 9007199254740992.0;  // 2**53
     }
 }
 
