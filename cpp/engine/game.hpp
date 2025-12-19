@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <functional>
 #include <iterator>
 #include <memory>
@@ -83,10 +85,13 @@ using EventLogger = std::function<void(const Event&)>;
 
 class PythonicRNG {
 public:
-    PythonicRNG();
-    explicit PythonicRNG(std::uint32_t seed);
+    enum class Mode { PythonMT, StdMT };
+
+    PythonicRNG(Mode mode = Mode::PythonMT);
+    PythonicRNG(std::uint32_t seed, Mode mode = Mode::PythonMT);
 
     void seed(std::uint32_t seed);
+    void set_mode(Mode mode);
     int randint(int low, int high_inclusive);
     std::uint32_t randbits(int k);
     int randbelow(int n);
@@ -95,7 +100,18 @@ public:
     void shuffle(Iterator first, Iterator last);
 
 private:
-    std::mt19937 engine_;
+    void init_by_array(const std::vector<std::uint32_t>& key);
+    void twist();
+    std::uint32_t extract();
+    double random();
+
+    static constexpr std::size_t kN = 624;
+    static constexpr std::size_t kM = 397;
+    std::array<std::uint32_t, kN> state_{};
+    std::size_t index_{kN + 1};
+    std::uint32_t last_seed_{0};
+    Mode mode_{Mode::PythonMT};
+    std::mt19937 std_engine_{};
 };
 
 template <typename Iterator>

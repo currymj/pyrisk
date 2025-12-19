@@ -60,6 +60,20 @@ public:
     std::vector<AttackPlan> attack() override;
 };
 
+class DeterministicAI : public AI {
+public:
+    using AI::AI;
+
+    Territory* initial_placement(const std::vector<Territory*>& empty, int remaining) override;
+    std::unordered_map<Territory*, int> reinforce(int available) override;
+    std::vector<AttackPlan> attack() override;
+    std::optional<MoveOrder> freemove() override { return std::nullopt; }
+
+private:
+    std::vector<Territory*> sorted_owned() const;
+    std::vector<Territory*> reinforce_targets() const;
+};
+
 class GameDriver {
 public:
     using AiFactory = std::function<std::unique_ptr<AI>(Player&, Game&)>;
@@ -74,6 +88,7 @@ public:
     std::string play();
 
 private:
+    void dispatch_event(const Event& event);
     Player& current_player();
     AI& current_ai();
     void setup_turn_order();
@@ -93,6 +108,7 @@ private:
     std::vector<std::size_t> turn_order_;
     std::size_t turn_{0};
     bool deal_{false};
+    EventLogger external_logger_{};
 };
 
 }  // namespace pyrisk

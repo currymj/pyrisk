@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_set>
 
 namespace pyrisk {
@@ -88,10 +89,94 @@ std::vector<AttackPlan> StupidAI::attack() {
     return plans;
 }
 
+std::vector<Territory*> DeterministicAI::sorted_owned() const {
+    std::vector<Territory*> owned = owned_territories(player_);
+    std::sort(owned.begin(), owned.end(), [](Territory* lhs, Territory* rhs) {
+        return lhs->name < rhs->name;
+    });
+    return owned;
+}
+
+std::vector<Territory*> DeterministicAI::reinforce_targets() const {
+    std::vector<Territory*> borders;
+    for (auto* territory : owned_territories(player_)) {
+        if (territory->border()) {
+            borders.push_back(territory);
+        }
+    }
+    if (borders.empty()) {
+        borders = owned_territories(player_);
+    }
+
+    std::sort(borders.begin(), borders.end(), [](Territory* lhs, Territory* rhs) {
+        auto pressure = [](Territory* t) {
+            int enemy_force = 0;
+            for (auto* adj : t->connect) {
+                if (adj->owner != nullptr && adj->owner != t->owner) {
+                    enemy_force += adj->forces;
+                }
+            }
+            return std::make_tuple(-enemy_force, -t->forces, t->name);
+        };
+        return pressure(lhs) < pressure(rhs);
+    });
+    return borders;
+}
+
+Territory* DeterministicAI::initial_placement(const std::vector<Territory*>& empty,
+                                              int /*remaining*/) {
+    std::vector<Territory*> choices = empty;
+    if (choices.empty()) {
+        choices = owned_territories(player_);
+    }
+    std::sort(choices.begin(), choices.end(), [](Territory* lhs, Territory* rhs) {
+        return lhs->name < rhs->name;
+    });
+    return choices.empty() ? nullptr : choices.front();
+}
+
+std::unordered_map<Territory*, int> DeterministicAI::reinforce(int available) {
+    std::unordered_map<Territory*, int> allocations;
+    auto targets = reinforce_targets();
+    if (targets.empty()) {
+        return allocations;
+    }
+    for (int i = 0; i < available; ++i) {
+        Territory* target = targets[static_cast<std::size_t>(i % targets.size())];
+        allocations[target] += 1;
+    }
+    return allocations;
+}
+
+std::vector<AttackPlan> DeterministicAI::attack() {
+    std::vector<AttackPlan> plans;
+    std::unordered_set<std::string> targeted;
+    for (auto* territory : sorted_owned()) {
+        std::vector<Territory*> adjacent(territory->connect.begin(), territory->connect.end());
+        std::sort(adjacent.begin(), adjacent.end(), [](Territory* lhs, Territory* rhs) {
+            return lhs->name < rhs->name;
+        });
+        for (auto* neighbour : adjacent) {
+            if (neighbour->owner != &player_ && territory->forces > neighbour->forces + 1) {
+                if (targeted.count(neighbour->name) > 0) {
+                    continue;
+                }
+                plans.push_back({territory, neighbour,
+                                 [](int atk, int def) { return atk > def; },
+                                 [](int remaining) { return std::min(remaining - 1, 3); }});
+                targeted.insert(neighbour->name);
+            }
+        }
+    }
+    return plans;
+}
+
 GameDriver::GameDriver(World world, std::vector<std::string> player_names,
                        std::vector<AiFactory> ai_factories, bool deal, EventLogger logger,
                        std::optional<std::uint32_t> seed)
-    : game_(std::move(world), make_players(player_names), {}, seed), deal_(deal) {
+    : game_(std::move(world), make_players(player_names), {}, seed),
+      deal_(deal),
+      external_logger_(std::move(logger)) {
     if (player_names.size() != ai_factories.size()) {
         throw std::invalid_argument("player count must match AI factory count");
     }
@@ -101,18 +186,20 @@ GameDriver::GameDriver(World world, std::vector<std::string> player_names,
         ais_.push_back(ai_factories[i](game_.players[i], game_));
     }
 
-    game_.set_logger([this, logger](const Event& event) {
-        if (logger) {
-            logger(event);
-        }
-        for (auto& ai : ais_) {
-            ai->on_event(event);
-        }
-    });
+    game_.set_logger([this](const Event& event) { dispatch_event(event); });
 }
 
 Game& GameDriver::game() { return game_; }
 const Game& GameDriver::game() const { return game_; }
+
+void GameDriver::dispatch_event(const Event& event) {
+    if (external_logger_) {
+        external_logger_(event);
+    }
+    for (auto& ai : ais_) {
+        ai->on_event(event);
+    }
+}
 
 Player& GameDriver::current_player() {
     return game_.players[turn_order_[turn_ % turn_order_.size()]];
@@ -138,6 +225,7 @@ std::string GameDriver::play() {
     for (auto& ai : ais_) {
         ai->start();
     }
+    dispatch_event({"start", {}});
 
     initial_placement();
 
@@ -233,11 +321,15 @@ void GameDriver::handle_reinforcements(Player& player, AI& ai) {
     int reinforcements = game_.reinforcement_count(player);
     auto allocations = ai.reinforce(reinforcements);
     int assigned = 0;
-    for (const auto& [territory, count] : allocations) {
-        if (territory != nullptr && territory->owner == &player && count > 0) {
-            game_.reinforce(player.name, territory->name, count);
-            assigned += count;
+    std::vector<std::pair<Territory*, int>> ordered(allocations.begin(), allocations.end());
+    std::sort(ordered.begin(), ordered.end(),
+              [](const auto& lhs, const auto& rhs) { return lhs.first->name < rhs.first->name; });
+    for (const auto& [territory, count] : ordered) {
+        if (territory == nullptr || territory->owner != &player || count <= 0) {
+            continue;
         }
+        game_.reinforce(player.name, territory->name, count);
+        assigned += count;
     }
 
     if (assigned < reinforcements) {
